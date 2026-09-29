@@ -12,8 +12,19 @@ const props = withDefaults(
     activeId?: string | null
     width?: number
     height?: number
+    /** 节点 id → 期别名（联合分期联动时着色） */
+    periodOf?: Record<string, string>
+    /** 外部单位 id（如探方筛选下的跨方对端、期别筛选下连带带出的非本期单位），虚线描边 */
+    external?: Set<string>
   }>(),
-  { highlighted: () => new Set<string>(), activeId: null, width: 760, height: 420 }
+  {
+    highlighted: () => new Set<string>(),
+    activeId: null,
+    width: 760,
+    height: 420,
+    periodOf: () => ({}),
+    external: () => new Set<string>()
+  }
 )
 
 const emit = defineEmits<{
@@ -32,6 +43,18 @@ const TYPE_FILLS: Record<string, string> = {
   房址: '#8e6bbf',
   沟: '#1f8a70',
   墓葬: '#c0392b'
+}
+
+/** 期别联动配色：期别名哈希到一组沉稳色板 */
+const PERIOD_PALETTE = ['#c9a227', '#2f6f8f', '#1f8a70', '#8e6bbf', '#c0392b', '#d07b2b', '#4b8a5a']
+function hashIndex(text: string): number {
+  let hash = 0
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0
+  return hash % PERIOD_PALETTE.length
+}
+function periodColor(nodeId: string): string | null {
+  const name = props.periodOf[nodeId]
+  return name ? PERIOD_PALETTE[hashIndex(name)] : null
 }
 
 const positions = reactive<Record<string, { x: number; y: number }>>({})
@@ -98,7 +121,8 @@ const edgeGeometry = computed(() =>
       const dx = to.x - from.x
       const dy = to.y - from.y
       const length = Math.hypot(dx, dy) || 1
-      const shrink = 22
+      // 有向边两端收缩给箭头留位；共存（无向）两端对称短缩
+      const shrink = edge.directed ? 22 : 12
       return {
         edge,
         x1: from.x + (dx / length) * shrink,
@@ -154,8 +178,9 @@ function edgeOpacity(edge: GraphEdge): number {
           :y2="item.y2"
           :stroke="item.edge.inCycle ? '#c0392b' : EDGE_COLORS[item.edge.type] ?? '#8a97a3'"
           :stroke-width="item.edge.inCycle ? 2.6 : 1.8"
-          :stroke-dasharray="item.edge.inCycle ? '7 4' : '0'"
-          :marker-end="item.edge.inCycle ? 'url(#rg-arrow-cycle)' : 'url(#rg-arrow)'"
+          :stroke-dasharray="item.edge.inCycle ? '7 4' : item.edge.directed ? '0' : '2 5'"
+          :stroke-linecap="item.edge.directed ? 'butt' : 'round'"
+          :marker-end="item.edge.inCycle ? 'url(#rg-arrow-cycle)' : item.edge.directed ? 'url(#rg-arrow)' : ''"
         />
         <text :x="item.labelX" :y="item.labelY" font-size="10" text-anchor="middle" fill="#6b7b8c">
           {{ item.edge.type }}
@@ -175,8 +200,20 @@ function edgeOpacity(edge: GraphEdge): number {
           :cy="positions[node.id]?.y ?? 0"
           r="20"
           :fill="activeId === node.id ? '#c9a227' : TYPE_FILLS[node.type] ?? '#2f6f8f'"
-          :stroke="highlighted.has(node.id) ? '#a9762f' : '#ffffff'"
-          :stroke-width="highlighted.has(node.id) ? 3 : 1.6"
+          :fill-opacity="external.has(node.id) ? 0.45 : 1"
+          :stroke="periodColor(node.id) ?? (highlighted.has(node.id) ? '#a9762f' : '#ffffff')"
+          :stroke-width="periodColor(node.id) ? 3.4 : highlighted.has(node.id) ? 3 : 1.6"
+          :stroke-dasharray="external.has(node.id) ? '4 3' : '0'"
+        />
+        <circle
+          v-if="external.has(node.id)"
+          :cx="positions[node.id]?.x ?? 0"
+          :cy="positions[node.id]?.y ?? 0"
+          r="24"
+          fill="none"
+          stroke="#b08a5a"
+          stroke-width="1"
+          stroke-dasharray="3 3"
         />
         <text
           :x="positions[node.id]?.x ?? 0"
@@ -187,6 +224,24 @@ function edgeOpacity(edge: GraphEdge): number {
         >
           {{ node.label }}
         </text>
+        <g v-if="periodOf[node.id]">
+          <rect
+            :x="(positions[node.id]?.x ?? 0) - 17"
+            :y="(positions[node.id]?.y ?? 0) - 33"
+            :width="Math.max(30, periodOf[node.id].length * 11 + 8)"
+            height="15"
+            rx="7"
+            :fill="periodColor(node.id) ?? '#c9a227'"
+          />
+          <text
+            :x="(positions[node.id]?.x ?? 0) - 13"
+            :y="(positions[node.id]?.y ?? 0) - 22"
+            font-size="10"
+            fill="#fff"
+          >
+            {{ periodOf[node.id] }}
+          </text>
+        </g>
         <text
           :x="(positions[node.id]?.x ?? 0) + 26"
           :y="(positions[node.id]?.y ?? 0) + 4"

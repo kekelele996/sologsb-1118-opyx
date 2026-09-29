@@ -7,24 +7,36 @@ import StratumDepthBar from '@/components/common/StratumDepthBar.vue'
 import TrenchTag from '@/components/common/TrenchTag.vue'
 import { useStore } from '@/hooks/usePersistentStore'
 import { useStratumOrder } from '@/hooks/useStratumOrder'
+import { usePhasing } from '@/hooks/usePhasing'
 import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
+import { periodStore } from '@/stores/periodStore'
 import { uid } from '@/utils/id'
 
 const trenchState = useStore(trenchStore)
 const stratumState = useStore(stratumStore)
 const artifactState = useStore(artifactStore)
 const relationState = useStore(relationStore)
+const periodState = useStore(periodStore)
 
 const { result: order } = useStratumOrder(
   computed(() => stratumState.strata),
   computed(() => relationState.relations)
 )
 
+const { conflictUnitIds, periodNameOf, violationTexts } = usePhasing(
+  computed(() => stratumState.strata),
+  computed(() => relationState.relations),
+  computed(() => periodState.periods),
+  computed(() => periodState.assignments),
+  computed(() => trenchState.trenches)
+)
+
 const filterTrenchId = ref('')
 const filterType = ref<UnitType | ''>('')
+const filterPeriodId = ref<string>('')
 const depthFrom = ref<number | undefined>(undefined)
 const depthTo = ref<number | undefined>(undefined)
 const selectedIds = ref<string[]>([])
@@ -47,14 +59,34 @@ const form = reactive({
   drawingNo: ''
 })
 
+const periodsSorted = computed(() => [...periodState.periods].sort((a, b) => a.order - b.order))
+
 const visible = computed(() =>
   stratumState.strata.filter((item) => {
     if (filterTrenchId.value && item.trenchId !== filterTrenchId.value) return false
     if (filterType.value && item.type !== filterType.value) return false
+    if (filterPeriodId.value === '__none__' && periodState.assignments[item.id]) return false
+    if (filterPeriodId.value && filterPeriodId.value !== '__none__' && periodState.assignments[item.id] !== filterPeriodId.value)
+      return false
     if (depthFrom.value !== undefined && item.bottomDepth < depthFrom.value) return false
     if (depthTo.value !== undefined && item.topDepth > depthTo.value) return false
     return true
   })
+)
+
+/** 按探方查看期别：分组统计 */
+const trenchPeriodGroups = computed(() =>
+  trenchState.trenches
+    .filter((trench) => !filterTrenchId.value || trench.id === filterTrenchId.value)
+    .map((trench) => {
+      const units = stratumState.strata.filter((item) => item.trenchId === trench.id)
+      const byPeriod = new Map<string, number>()
+      units.forEach((unit) => {
+        const periodId = periodState.assignments[unit.id] ?? '__none__'
+        byPeriod.set(periodId, (byPeriod.get(periodId) ?? 0) + 1)
+      })
+      return { trench, units: units.length, byPeriod }
+    })
 )
 
 function trenchLabel(trenchId: string): string {
@@ -77,6 +109,7 @@ function duplicatedOf(stratum: Stratum): boolean {
 function rowClass(param: { row: Stratum }): string {
   if (invertedOf(param.row)) return 'inverted-row'
   if (duplicatedOf(param.row)) return 'duplicate-row'
+  if (conflictUnitIds.value.has(param.row.id)) return 'phasing-conflict-row'
   return ''
 }
 
@@ -182,6 +215,7 @@ async function remove(stratum: Stratum): Promise<void> {
   }
   await ElMessageBox.confirm(`确认删除地层单位「${stratum.code}」？`, '删除确认', { type: 'warning' })
   await stratumStore.getState().remove(stratum.id)
+  await periodStore.getState().removeAssignmentsByStratum(stratum.id)
   ElMessage.success('地层单位已删除')
 }
 
@@ -210,12 +244,12 @@ async function applyBatchType(): Promise<void> {
     </div>
 
     <el-alert
-      v-if="order.inverted.length > 0 || order.duplicateCodes.length > 0"
+      v-if="order.inverted.length > 0 || order.duplicateCodes.length > 0 || conflictUnitIds.size > 0"
       class="alert"
       type="warning"
       :closable="false"
       show-icon
-      :title="`发现 ${order.inverted.length} 个层序倒置单位、${order.duplicateCodes.length} 个重复单位号`"
+      :title="`发现 ${order.inverted.length} 个层序倒置单位、${order.duplicateCodes.length} 个重复单位号、${conflictUnitIds.size} 个单位卷入跨方分期矛盾`"
     >
       <template #default>
         <p v-if="order.inverted.length > 0">
@@ -225,6 +259,7 @@ async function applyBatchType(): Promise<void> {
         <p v-if="order.conflicts.length > 0">
           与层位关系矛盾：{{ order.conflicts.join('；') }}
         </p>
+        <p v-for="(text, index) in violationTexts" :key="`pv${index}`" class="conflict-text">{{ text }}</p>
       </template>
     </el-alert>
     <el-alert
@@ -233,8 +268,38 @@ async function applyBatchType(): Promise<void> {
       type="success"
       :closable="false"
       show-icon
-      title="层序与单位号校验通过"
+      title="层序、单位号与跨方分期校验通过"
     />
+
+    <el-card shadow="never" class="period-overview">
+      <template #header>
+        <div class="overview-head">
+          <span>按探方查看期别</span>
+          <el-button link type="primary" size="small" @click="$router.push('/phasing')">前往联合分期调整 →</el-button>
+        </div>
+      </template>
+      <div class="overview-grid">
+        <div v-for="group in trenchPeriodGroups" :key="group.trench.id" class="overview-cell">
+          <div class="cell-head">{{ group.trench.area }} · {{ group.trench.code }}</div>
+          <div class="cell-tags">
+            <el-tag
+              v-for="period in periodsSorted.filter((p) => group.byPeriod.has(p.id))"
+              :key="period.id"
+              size="small"
+              effect="dark"
+              class="mini"
+            >
+              {{ period.name }} × {{ group.byPeriod.get(period.id) }}
+            </el-tag>
+            <el-tag v-if="group.byPeriod.get('__none__')" size="small" type="info" effect="plain" class="mini">
+              未定 × {{ group.byPeriod.get('__none__') }}
+            </el-tag>
+            <span v-if="group.units === 0" class="muted">暂无单位</span>
+          </div>
+        </div>
+        <p v-if="trenchPeriodGroups.length === 0" class="muted">暂无探方</p>
+      </div>
+    </el-card>
 
     <div class="toolbar">
       <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 190px">
@@ -242,6 +307,10 @@ async function applyBatchType(): Promise<void> {
       </el-select>
       <el-select v-model="filterType" placeholder="全部类型" clearable style="width: 130px">
         <el-option v-for="type in UNIT_TYPES" :key="type" :label="type" :value="type" />
+      </el-select>
+      <el-select v-model="filterPeriodId" placeholder="全部期别" clearable style="width: 140px">
+        <el-option v-for="period in periodsSorted" :key="period.id" :label="period.name" :value="period.id" />
+        <el-option label="未定" value="__none__" />
       </el-select>
       <div class="depth">
         <span class="muted">深度区间（米）</span>
@@ -297,13 +366,20 @@ async function applyBatchType(): Promise<void> {
           <span v-if="row.inclusions.length === 0" class="muted">—</span>
         </template>
       </el-table-column>
+      <el-table-column label="期别" width="90">
+        <template #default="{ row }: { row: Stratum }">
+          <el-tag v-if="periodNameOf(row.id)" size="small" effect="dark" type="warning">{{ periodNameOf(row.id) }}</el-tag>
+          <span v-else class="muted">未定</span>
+        </template>
+      </el-table-column>
       <el-table-column label="出土物" width="90">
         <template #default="{ row }: { row: Stratum }">{{ artifactsOf(row.id) }} 件</template>
       </el-table-column>
-      <el-table-column label="校验" width="110">
+      <el-table-column label="校验" width="124">
         <template #default="{ row }: { row: Stratum }">
           <el-tag v-if="invertedOf(row)" type="danger" size="small" effect="dark">层序倒置</el-tag>
           <el-tag v-else-if="conflictOf(row.code)" type="warning" size="small" effect="dark">关系矛盾</el-tag>
+          <el-tag v-else-if="conflictUnitIds.has(row.id)" type="danger" size="small" effect="dark">分期相抵</el-tag>
           <el-tag v-else type="success" size="small" effect="plain">正常</el-tag>
         </template>
       </el-table-column>
@@ -399,6 +475,43 @@ async function applyBatchType(): Promise<void> {
 .alert {
   margin-bottom: 14px;
 }
+.conflict-text {
+  color: #c0392b;
+  line-height: 1.6;
+}
+.period-overview {
+  margin-bottom: 14px;
+  border-radius: 12px;
+}
+.overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.overview-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.overview-cell {
+  min-width: 220px;
+  flex: 1 1 220px;
+  padding: 8px 10px;
+  border: 1px solid #ece4d5;
+  border-radius: 8px;
+  background: #fbfaf6;
+}
+.cell-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8a5a2b;
+  margin-bottom: 6px;
+}
+.cell-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .depth {
   display: flex;
   align-items: center;
@@ -411,5 +524,8 @@ async function applyBatchType(): Promise<void> {
   margin: 0;
   color: #c0392b;
   font-size: 12px;
+}
+:deep(.phasing-conflict-row) {
+  background: #fdecea !important;
 }
 </style>

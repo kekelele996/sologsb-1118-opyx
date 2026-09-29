@@ -1,22 +1,30 @@
 import { onUnmounted, reactive } from 'vue'
 import type { StoreApi } from 'zustand/vanilla'
 import Dexie, { type Table } from 'dexie'
-import type { Artifact, Relation, Stratum, Trench } from '@/types'
+import type { Artifact, Period, Relation, Stratum, Trench } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 四张表 + 元数据表 */
+/** 单位 → 期别 指派行（每个地层单位至多一行） */
+export interface AssignmentRow {
+  stratumId: string
+  periodId: string
+}
+
+/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 / 期别 / 分期指派 六张表 + 元数据表 */
 class TrenchLogDb extends Dexie {
   trenches!: Table<Trench, string>
   strata!: Table<Stratum, string>
   artifacts!: Table<Artifact, string>
   relations!: Table<Relation, string>
+  periods!: Table<Period, string>
+  assignments!: Table<AssignmentRow, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
@@ -29,7 +37,7 @@ class TrenchLogDb extends Dexie {
       meta: 'key'
     })
     // v2：地层单位新增「开口层位」字段，迁移时为历史数据补齐默认值
-    this.version(SCHEMA_VERSION)
+    this.version(2)
       .stores({
         trenches: 'id, code, area, backfilled',
         strata: 'id, trenchId, code, type, topDepth',
@@ -50,6 +58,16 @@ class TrenchLogDb extends Dexie {
             }
           })
       })
+    // v3：跨探方联合分期，新增「期别」与「单位分期指派」两张表
+    this.version(SCHEMA_VERSION).stores({
+      trenches: 'id, code, area, backfilled',
+      strata: 'id, trenchId, code, type, topDepth',
+      artifacts: 'id, stratumId, code, category, date',
+      relations: 'id, unitAId, unitBId, type, basis',
+      periods: 'id, order, name',
+      assignments: 'stratumId, periodId',
+      meta: 'key'
+    })
   }
 }
 
@@ -177,6 +195,34 @@ export async function seedDemoData(): Promise<void> {
       formation: '耕土层',
       date: today,
       drawingNo: 'T0502-西壁-01'
+    },
+    {
+      id: 'st_0502_l2',
+      trenchId: 'tr_0502',
+      code: 'L02',
+      type: '地层',
+      openLayer: '第②层',
+      topDepth: 0.3,
+      bottomDepth: 0.7,
+      soil: '黄褐色黏土，致密，与 T0501 第②层土质一致',
+      inclusions: ['陶片', '骨'],
+      formation: '汉代文化层（西延接 T0501）',
+      date: today,
+      drawingNo: 'T0502-西壁-02'
+    },
+    {
+      id: 'st_0502_h22',
+      trenchId: 'tr_0502',
+      code: 'H22',
+      type: '灰坑',
+      openLayer: '第②层下',
+      topDepth: 0.7,
+      bottomDepth: 1.3,
+      soil: '深灰褐土，含灰烬与红烧土块',
+      inclusions: ['陶片', '炭屑'],
+      formation: '生活垃圾坑',
+      date: today,
+      drawingNo: 'T0502-H22-平剖面'
     }
   ])
 
@@ -229,6 +275,48 @@ export async function seedDemoData(): Promise<void> {
       basis: '剖面观察',
       recorder: '方铭',
       note: 'L01 叠压 L02，界面清晰'
+    },
+    {
+      id: 'rl_003',
+      unitAId: 'st_0502_h22',
+      type: '打破',
+      unitBId: 'st_0502_l2',
+      basis: '剖面观察',
+      recorder: '方铭',
+      note: 'T0502 西壁 H22 开口于第②层下，打破本探方 L02'
+    },
+    {
+      id: 'rl_004',
+      unitAId: 'st_0502_h22',
+      type: '叠压',
+      unitBId: 'st_0501_h12',
+      basis: '平面观察',
+      recorder: '方铭',
+      note: '跨方对照：T0502 H22 坑底堆积物与 T0501 H12 上层填土可衔接，H22 堆积略晚'
+    },
+    {
+      id: 'rl_005',
+      unitAId: 'st_0501_l2',
+      type: '共存',
+      unitBId: 'st_0502_l2',
+      basis: '平面观察',
+      recorder: '方铭',
+      note: '跨方对照：两方第②层土质土色一致，为同一汉代文化层面'
     }
+  ])
+
+  await db.periods.bulkPut([
+    { id: 'pd_1', name: '一期', order: 0, note: '汉代文化层（最早）' },
+    { id: 'pd_2', name: '二期', order: 1, note: '汉代灰坑 H12 / H22' },
+    { id: 'pd_3', name: '三期', order: 2, note: '近现代耕土层（最晚）' }
+  ])
+
+  await db.assignments.bulkPut([
+    { stratumId: 'st_0501_l2', periodId: 'pd_1' },
+    { stratumId: 'st_0502_l2', periodId: 'pd_1' },
+    { stratumId: 'st_0501_h12', periodId: 'pd_2' },
+    { stratumId: 'st_0502_h22', periodId: 'pd_2' },
+    { stratumId: 'st_0501_l1', periodId: 'pd_3' },
+    { stratumId: 'st_0502_l1', periodId: 'pd_3' }
   ])
 }

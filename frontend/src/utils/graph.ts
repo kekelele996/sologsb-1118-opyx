@@ -6,6 +6,8 @@ export interface GraphEdge {
   to: string
   type: RelationType
   basis: string
+  /** 是否为有向时序边（叠压/打破为 true，共存为 false） */
+  directed: boolean
   /** 是否处于被检测出的环路中 */
   inCycle: boolean
 }
@@ -22,46 +24,56 @@ export interface GraphNode {
 export interface DirectedGraph {
   nodes: GraphNode[]
   edges: GraphEdge[]
-  /** 邻接表：节点 → 直接后继 */
+  /** 邻接表：节点 → 直接后继（叠压/打破） */
   adjacency: Map<string, string[]>
   /** 反向邻接表 */
   reverse: Map<string, string[]>
+  /** 无向邻居表（共存关系，不参与时序与环路判断） */
+  neighbors: Map<string, string[]>
   /** 是否存在环路 */
   hasCycle: boolean
   /** 环路路径（节点 id 序列） */
   cyclePath: string[]
 }
 
-/** 构建有向图（叠压 A→B 表示 A 晚于/压于 B；打破 A→B 表示 A 打破 B；共存按无向处理，两个方向都加边） */
+/** 构建有向图（叠压/打破 A→B 表示 A 晚于 B；共存按无向同期连接，不产生时序方向故不会误判为环） */
 export function buildGraph(strata: Stratum[], relations: Relation[]): DirectedGraph {
   const adjacency = new Map<string, string[]>()
   const reverse = new Map<string, string[]>()
+  const neighbors = new Map<string, string[]>()
   strata.forEach((item) => {
     adjacency.set(item.id, [])
     reverse.set(item.id, [])
+    neighbors.set(item.id, [])
   })
 
   const edges: GraphEdge[] = []
   relations.forEach((relation) => {
     if (!adjacency.has(relation.unitAId) || !adjacency.has(relation.unitBId)) return
-    const pairs: [string, string][] =
-      relation.type === '共存'
-        ? [
-            [relation.unitAId, relation.unitBId],
-            [relation.unitBId, relation.unitAId]
-          ]
-        : [[relation.unitAId, relation.unitBId]]
-    pairs.forEach(([from, to], index) => {
-      adjacency.get(from)?.push(to)
-      reverse.get(to)?.push(from)
+    if (relation.type === '共存') {
+      neighbors.get(relation.unitAId)?.push(relation.unitBId)
+      neighbors.get(relation.unitBId)?.push(relation.unitAId)
       edges.push({
-        id: `${relation.id}#${index}`,
-        from,
-        to,
+        id: `${relation.id}#0`,
+        from: relation.unitAId,
+        to: relation.unitBId,
         type: relation.type,
         basis: relation.basis,
+        directed: false,
         inCycle: false
       })
+      return
+    }
+    adjacency.get(relation.unitAId)?.push(relation.unitBId)
+    reverse.get(relation.unitBId)?.push(relation.unitAId)
+    edges.push({
+      id: `${relation.id}#0`,
+      from: relation.unitAId,
+      to: relation.unitBId,
+      type: relation.type,
+      basis: relation.basis,
+      directed: true,
+      inCycle: false
     })
   })
 
@@ -89,7 +101,7 @@ export function buildGraph(strata: Stratum[], relations: Relation[]): DirectedGr
     type: stratum.type
   }))
 
-  return { nodes, edges, adjacency, reverse, hasCycle, cyclePath }
+  return { nodes, edges, adjacency, reverse, neighbors, hasCycle, cyclePath }
 }
 
 /** 环路检测（DFS，返回环路路径；无环返回空数组） */
@@ -148,7 +160,7 @@ export function topoLayers(adjacency: Map<string, string[]>, nodeIds: string[]):
   return layers
 }
 
-/** 判断新增关系是否会形成环路（用于保存前校验） */
+/** 判断新增关系是否会形成环路（用于保存前校验）；共存为无向同期关系，不产生时序方向 */
 export function wouldCreateCycle(relations: Relation[], candidate: Pick<Relation, 'unitAId' | 'unitBId' | 'type'>): boolean {
   const adjacency = new Map<string, string[]>()
   const push = (from: string, to: string): void => {
@@ -157,15 +169,13 @@ export function wouldCreateCycle(relations: Relation[], candidate: Pick<Relation
     adjacency.set(from, list)
   }
   relations.forEach((relation) => {
-    push(relation.unitAId, relation.unitBId)
-    if (relation.type === '共存') push(relation.unitBId, relation.unitAId)
+    if (relation.type !== '共存') push(relation.unitAId, relation.unitBId)
   })
-  push(candidate.unitAId, candidate.unitBId)
-  if (candidate.type === '共存') push(candidate.unitBId, candidate.unitAId)
+  if (candidate.type !== '共存') push(candidate.unitAId, candidate.unitBId)
   return findCycle(adjacency).length > 0
 }
 
-/** 取某个节点的直接关系（用于点击高亮） */
+/** 取某个节点的直接关系（用于点击高亮；含共存邻居） */
 export function directRelations(graph: DirectedGraph, nodeId: string): { outgoing: string[]; incoming: string[] } {
   return {
     outgoing: graph.adjacency.get(nodeId) ?? [],
@@ -173,9 +183,10 @@ export function directRelations(graph: DirectedGraph, nodeId: string): { outgoin
   }
 }
 
-/** 高亮子图：节点本身 + 直接关联节点 */
+/** 高亮子图：节点本身 + 直接前后继 + 共存邻居 */
 export function highlightSubgraph(graph: DirectedGraph, nodeId: string | null): Set<string> {
   if (!nodeId) return new Set()
   const { outgoing, incoming } = directRelations(graph, nodeId)
-  return new Set<string>([nodeId, ...outgoing, ...incoming])
+  const peers = graph.neighbors.get(nodeId) ?? []
+  return new Set<string>([nodeId, ...outgoing, ...incoming, ...peers])
 }

@@ -7,16 +7,26 @@ import { useStore } from '@/hooks/usePersistentStore'
 import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
+import { periodStore } from '@/stores/periodStore'
 
 const WALLS = ['北壁', '东壁', '南壁', '西壁'] as const
 
 const stratumState = useStore(stratumStore)
 const trenchState = useStore(trenchStore)
 const artifactState = useStore(artifactStore)
+const periodState = useStore(periodStore)
 
 const selectedTrenchId = ref('')
 const wall = ref<(typeof WALLS)[number]>('北壁')
 const showArtifacts = ref(true)
+/** 剖面联动期别：空串=全部，__none__=未定 */
+const filterPeriodId = ref<string>('')
+
+const periodsSorted = computed(() => [...periodState.periods].sort((a, b) => a.order - b.order))
+const periodNameOf = (stratumId: string): string => {
+  const periodId = periodState.assignments[stratumId]
+  return periodsSorted.value.find((item) => item.id === periodId)?.name ?? ''
+}
 
 const CANVAS_W = 760
 const CANVAS_H = 460
@@ -34,14 +44,27 @@ watch(
 
 const trench = computed(() => trenchState.trenches.find((item) => item.id === selectedTrenchId.value) ?? null)
 
-const strata = computed(() =>
+/** 本探方全部单位（用于计算深度刻度，保证切换期别时刻度不跳动） */
+const trenchStrata = computed(() =>
   stratumState.strata
     .filter((item) => item.trenchId === selectedTrenchId.value)
     .sort((a, b) => a.topDepth - b.topDepth)
 )
 
+/** 按期别联动后的单位（绘制条带） */
+const strata = computed(() =>
+  trenchStrata.value.filter((item) => {
+    if (filterPeriodId.value === '__none__') return !periodState.assignments[item.id]
+    if (filterPeriodId.value) return periodState.assignments[item.id] === filterPeriodId.value
+    return true
+  })
+)
+
+/** 被期别筛选隐藏的单位数 */
+const hiddenCount = computed(() => trenchStrata.value.length - strata.value.length)
+
 const maxDepth = computed(() => {
-  const deepest = strata.value.reduce((max, item) => Math.max(max, item.bottomDepth, item.topDepth), 0)
+  const deepest = trenchStrata.value.reduce((max, item) => Math.max(max, item.bottomDepth, item.topDepth), 0)
   return Math.max(0.5, Math.ceil((deepest + 0.2) * 10) / 10)
 })
 
@@ -68,7 +91,8 @@ function artifactPos(artifact: Artifact): { x: number; y: number } {
 }
 
 function stratumLabel(stratum: Stratum): string {
-  return `${stratum.code} · ${stratum.type} · 厚 ${stratumThickness(stratum)} m`
+  const period = periodNameOf(stratum.id)
+  return `${stratum.code}${period ? ` · ${period}` : ''} · ${stratum.type} · 厚 ${stratumThickness(stratum)} m`
 }
 
 const unitColors: Record<string, string> = {
@@ -90,18 +114,22 @@ const unitColors: Record<string, string> = {
         </p>
       </div>
       <div class="head-actions">
-        <el-select v-model="selectedTrenchId" placeholder="选择探方" style="width: 200px">
+        <el-select v-model="selectedTrenchId" placeholder="选择探方" style="width: 180px">
           <el-option v-for="item in trenchState.trenches" :key="item.id" :label="`${item.area} · ${item.code}`" :value="item.id" />
         </el-select>
-        <el-select v-model="wall" style="width: 120px">
+        <el-select v-model="filterPeriodId" placeholder="全部期别" clearable style="width: 130px">
+          <el-option v-for="period in periodsSorted" :key="period.id" :label="period.name" :value="period.id" />
+          <el-option label="未定" value="__none__" />
+        </el-select>
+        <el-select v-model="wall" style="width: 110px">
           <el-option v-for="item in WALLS" :key="item" :label="item" :value="item" />
         </el-select>
-        <el-switch v-model="showArtifacts" active-text="显示出土物" />
+        <el-switch v-model="showArtifacts" active-text="出土物" />
       </div>
     </div>
 
     <el-alert
-      v-if="strata.length === 0"
+      v-if="trenchStrata.length === 0"
       class="alert"
       type="warning"
       :closable="false"
@@ -114,7 +142,7 @@ const unitColors: Record<string, string> = {
       type="info"
       :closable="false"
       show-icon
-      :title="`${trench?.area} · ${trench?.code}（${trench?.size}）共 ${strata.length} 个地层单位、${artifactsOfTrench.length} 件出土物；最深 ${maxDepth} m`"
+      :title="`${trench?.area} · ${trench?.code}（${trench?.size}）当前显示 ${strata.length} / ${trenchStrata.length} 个单位、${artifactsOfTrench.length} 件出土物；最深 ${maxDepth} m${filterPeriodId ? `（已按期别联动，隐藏 ${hiddenCount} 个）` : ''}`"
     >
       <template #default>
         <p v-if="trench?.wallNote">四壁方向备注：{{ trench.wallNote }}</p>
@@ -126,6 +154,21 @@ const unitColors: Record<string, string> = {
         <template #header>{{ wall }}剖面示意（深度刻度 0 – {{ maxDepth }} m）</template>
         <svg :width="CANVAS_W" :height="CANVAS_H" role="img" :aria-label="`${wall}剖面示意`">
           <rect :width="CANVAS_W" :height="CANVAS_H" rx="10" fill="#fbfaf6" stroke="#e6ded0" />
+          <!-- 非所选期别的单位：虚线残影，保留层位上下文 -->
+          <g v-if="filterPeriodId">
+            <rect
+              v-for="ghost in trenchStrata.filter((item) => !strata.some((s) => s.id === item.id))"
+              :key="`ghost-${ghost.id}`"
+              x="90"
+              :y="depthToY(Math.min(ghost.topDepth, ghost.bottomDepth))"
+              :width="CANVAS_W - 150"
+              :height="Math.max(6, depthToY(Math.max(ghost.topDepth, ghost.bottomDepth)) - depthToY(Math.min(ghost.topDepth, ghost.bottomDepth)))"
+              fill="none"
+              stroke="#c9bfae"
+              stroke-width="1"
+              stroke-dasharray="5 4"
+            />
+          </g>
           <!-- 地层条带 -->
           <g v-for="stratum in strata" :key="stratum.id">
             <rect
@@ -195,13 +238,14 @@ const unitColors: Record<string, string> = {
           <div v-for="stratum in strata" :key="stratum.id" class="bar-row">
             <div class="bar-head">
               <span class="mono">{{ stratum.code }}</span>
+              <el-tag v-if="periodNameOf(stratum.id)" size="small" type="warning" effect="dark">{{ periodNameOf(stratum.id) }}</el-tag>
               <el-tag size="small" effect="plain">{{ stratum.type }}</el-tag>
               <span class="muted">{{ stratum.openLayer }}</span>
             </div>
             <StratumDepthBar :stratum="stratum" :length="250" :max-depth="maxDepth" />
             <p class="soil">{{ stratum.soil || '未记录土质土色' }} · 包含物 {{ stratum.inclusions.join('、') || '无' }}</p>
           </div>
-          <p v-if="strata.length === 0" class="muted">暂无地层单位</p>
+          <p v-if="strata.length === 0" class="muted">当前期别下暂无地层单位</p>
         </div>
 
         <template v-if="artifactsOfTrench.length > 0">
