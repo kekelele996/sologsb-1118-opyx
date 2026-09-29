@@ -10,10 +10,12 @@ const props = withDefaults(
     highlighted?: Set<string>
     /** 选中的节点 id */
     activeId?: string | null
+    /** 期别联动：需要弱化展示的节点 id（非所选期别） */
+    dimmedIds?: Set<string>
     width?: number
     height?: number
   }>(),
-  { highlighted: () => new Set<string>(), activeId: null, width: 760, height: 420 }
+  { highlighted: () => new Set<string>(), activeId: null, dimmedIds: () => new Set<string>(), width: 760, height: 420 }
 )
 
 const emit = defineEmits<{
@@ -113,11 +115,13 @@ const edgeGeometry = computed(() =>
 )
 
 function nodeOpacity(node: GraphNode): number {
+  if (props.dimmedIds.has(node.id)) return 0.22
   if (props.highlighted.size === 0) return 1
   return props.highlighted.has(node.id) ? 1 : 0.28
 }
 
 function edgeOpacity(edge: GraphEdge): number {
+  if (props.dimmedIds.has(edge.from) || props.dimmedIds.has(edge.to)) return 0.15
   if (props.highlighted.size === 0) return 1
   const active = props.activeId
   if (!active) return 1

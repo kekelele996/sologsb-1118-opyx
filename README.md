@@ -57,13 +57,13 @@ sologsb-1118/
 │   ├── nginx.conf              # try_files 前端路由回落 + gzip
 │   ├── public/favicon.svg
 │   └── src/
-│       ├── types/              # trench.ts / stratum.ts / artifact.ts / relation.ts / index.ts
+│       ├── types/              # trench.ts / stratum.ts / phase.ts / artifact.ts / relation.ts / index.ts
 │       ├── stores/             # trenchStore / stratumStore / artifactStore / relationStore（Zustand）
 │       ├── components/common/  # StratumDepthBar / RelationGraph / TrenchTag / UnitPicker
-│       ├── hooks/              # useStratumOrder / useRelationGraph / usePersistentStore
-│       ├── pages/              # TrenchesPage / StrataPage / ArtifactsPage / RelationsPage / SectionsPage
+│       ├── hooks/              # useStratumOrder / useRelationGraph / usePhaseFilter / usePersistentStore
+│       ├── pages/              # TrenchesPage / StrataPage / PhasesPage / ArtifactsPage / RelationsPage / SectionsPage
 │       ├── router/index.ts
-│       └── utils/              # graph.ts / export.ts / id.ts
+│       └── utils/              # graph.ts / phasing.ts / export.ts / id.ts
 ```
 
 ## 五、数据模型与存储
@@ -71,12 +71,13 @@ sologsb-1118/
 | 模型 | 说明 | Dexie 表 |
 | --- | --- | --- |
 | Trench 探方 | 探方号、发掘区、规格、基点坐标、开口层位、发掘起止、负责人、四壁备注、是否回填 | `trenches` |
-| Stratum 地层单位 | 单位号、类型（地层/灰坑/房址/沟/墓葬）、开口层位、上下界深度、土质土色、包含物、堆积成因、绘图拍照号 | `strata` |
+| Stratum 地层单位 | 单位号、类型（地层/灰坑/房址/沟/墓葬）、开口层位、上下界深度、土质土色、包含物、堆积成因、绘图拍照号、**联合分期期别** | `strata` |
 | Artifact 出土物 | 所属地层单位、器物编号、类别、件数、残整程度、探方内 X/Y/Z、出土日期、提取人、临时存放 | `artifacts` |
 | Relation 层位关系 | 单位 A、关系类型（叠压/打破/共存）、单位 B、判定依据、记录人、备注 | `relations` |
 
 - 数据库名 `gbtrenchlog`，`meta` 表保存 `schemaVersion`；
 - `version(2)` 升级迁移会为历史地层单位补齐「开口层位」字段并规范包含物数组；
+- `version(3)` 升级迁移为地层单位新增 `phase`（期别）字段，历史数据置为 `null`（未分期）；
 - 数据仅存于浏览器本地，容器无状态、不挂载命名卷。
 
 ## 六、主要页面
@@ -84,10 +85,11 @@ sologsb-1118/
 | 路由 | 功能 |
 | --- | --- |
 | `/trenches` | 探方清单：按「发掘区-探方号」校验唯一性，卡片显示单位数、出土物件数、关系数与发掘进度状态 |
-| `/strata` | 地层单位编目表：按类型与深度区间筛选，层序倒置与单位号重复即时高亮，深度刻度条展示厚度 |
+| `/strata` | 地层单位编目表：按类型、期别与深度区间筛选，层序倒置与单位号重复即时高亮，深度刻度条展示厚度 |
+| `/phases` | 跨探方联合分期：为各探方单位统一按期定级，沿叠压/打破关系链核验「前项期别不晚于后项」、共存要求同期，绕回或相抵时列出具体单位与关系路径并挡住保存 |
 | `/artifacts` | 出土物登记与清单：先锁定所属地层单位（级联选择器），带出深度区间并校验出土深度是否在该区间内 |
-| `/relations` | 层位关系视图：SVG 有向图展示叠压/打破，点击节点高亮直接关系，新增关系前做环路检测 |
-| `/sections` | 四壁剖面示意：按深度刻度绘制地层条带与厚度标注，叠加出土物投影点 |
+| `/relations` | 层位关系视图：SVG 有向图展示叠压/打破，点击节点高亮直接关系，新增关系前做环路检测；顶部按期别筛选时与剖面联动 |
+| `/sections` | 四壁剖面示意：按深度刻度绘制地层条带与厚度标注，叠加出土物投影点；可按所选期别高亮联动 |
 
 ## 七、校验规则
 
@@ -96,4 +98,11 @@ sologsb-1118/
 - 上界深度大于下界深度即为**层序倒置**，编目表整行标红并在顶部汇总；
 - 若「A 叠压/打破 B」但 A 的上界深度大于 B，则提示层位关系与深度矛盾；
 - 新增层位关系前做**环路检测**（DFS），会形成闭合矛盾的关系直接拒绝保存；
-- 出土物的 Z（深度）必须落在其所属地层单位的深度区间内，否则给出层位核对提示。
+- 出土物的 Z（深度）必须落在其所属地层单位的深度区间内，否则给出层位核对提示；
+- **跨探方联合分期**（`/phases`）：
+  - 期别为正整数、编号越大越早（与「浅晚深早」一致，未分期为 `null`）；
+  - 叠压/打破 A→B 约束 `期别(A) ≤ 期别(B)`，共存 A＝B 约束双方期别相等；
+  - 保存前沿关系链做 DFS 核验：期别相抵、共存不同期或关系链绕回（环路）时，逐条列出具体单位（探方号·单位号）、期别与完整关系路径（跨方关系标注【跨方】），并挡住确认，问题行整行标红；
+  - 支持按关系链拓扑分层「自动建议期别」（孤立单位不建议，留给人工判断）；
+  - 编目表可按探方、期别筛选查看；关系图与四壁剖面共用同一期别筛选（localStorage 记忆，重开仍保留），非所选期别的节点、条带弱化显示；
+  - 分期结果写入 IndexedDB，重开浏览器后仍保留。

@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Inclusion, Stratum, UnitType } from '@/types'
 import { INCLUSIONS, UNIT_TYPES, isCodeDuplicated, isDepthInverted, stratumThickness } from '@/types'
+import { phaseLabel } from '@/utils/phasing'
 import StratumDepthBar from '@/components/common/StratumDepthBar.vue'
 import TrenchTag from '@/components/common/TrenchTag.vue'
 import { useStore } from '@/hooks/usePersistentStore'
@@ -25,6 +26,7 @@ const { result: order } = useStratumOrder(
 
 const filterTrenchId = ref('')
 const filterType = ref<UnitType | ''>('')
+const filterPhase = ref<number | null>(null)
 const depthFrom = ref<number | undefined>(undefined)
 const depthTo = ref<number | undefined>(undefined)
 const selectedIds = ref<string[]>([])
@@ -51,11 +53,21 @@ const visible = computed(() =>
   stratumState.strata.filter((item) => {
     if (filterTrenchId.value && item.trenchId !== filterTrenchId.value) return false
     if (filterType.value && item.type !== filterType.value) return false
+    if (filterPhase.value !== null && (item.phase ?? null) !== filterPhase.value) return false
     if (depthFrom.value !== undefined && item.bottomDepth < depthFrom.value) return false
     if (depthTo.value !== undefined && item.topDepth > depthTo.value) return false
     return true
   })
 )
+
+/** 已出现的期别（升序），用于筛选下拉 */
+const phaseOptions = computed(() => {
+  const set = new Set<number>()
+  stratumState.strata.forEach((item) => {
+    if (typeof item.phase === 'number') set.add(item.phase)
+  })
+  return Array.from(set).sort((a, b) => a - b)
+})
 
 function trenchLabel(trenchId: string): string {
   const trench = trenchState.trenches.find((item) => item.id === trenchId)
@@ -160,7 +172,8 @@ async function submit(): Promise<void> {
     inclusions: [...form.inclusions],
     formation: form.formation.trim(),
     date: form.date,
-    drawingNo: form.drawingNo.trim()
+    drawingNo: form.drawingNo.trim(),
+    phase: editingId.value ? stratumState.strata.find((item) => item.id === editingId.value)?.phase ?? null : null
   }
   await stratumStore.getState().save(row)
   if (isDepthInverted(row)) {
@@ -243,6 +256,9 @@ async function applyBatchType(): Promise<void> {
       <el-select v-model="filterType" placeholder="全部类型" clearable style="width: 130px">
         <el-option v-for="type in UNIT_TYPES" :key="type" :label="type" :value="type" />
       </el-select>
+      <el-select v-model="filterPhase" placeholder="全部期别" clearable style="width: 140px">
+        <el-option v-for="phase in phaseOptions" :key="phase" :label="phaseLabel(phase)" :value="phase" />
+      </el-select>
       <div class="depth">
         <span class="muted">深度区间（米）</span>
         <el-input-number v-model="depthFrom" :min="0" :step="0.1" :controls="false" placeholder="起" style="width: 100px" />
@@ -290,6 +306,14 @@ async function applyBatchType(): Promise<void> {
         </template>
       </el-table-column>
       <el-table-column label="开口层位" width="110" prop="openLayer" />
+      <el-table-column label="联合分期" width="100" align="center">
+        <template #default="{ row }: { row: Stratum }">
+          <el-tag v-if="row.phase !== null && row.phase !== undefined" type="warning" effect="dark" size="small">
+            {{ phaseLabel(row.phase) }}
+          </el-tag>
+          <span v-else class="muted">未分期</span>
+        </template>
+      </el-table-column>
       <el-table-column label="土质土色" min-width="150" prop="soil" show-overflow-tooltip />
       <el-table-column label="包含物" width="150">
         <template #default="{ row }: { row: Stratum }">

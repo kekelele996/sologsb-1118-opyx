@@ -14,14 +14,15 @@ const artifactState = useStore(artifactStore)
 const relationState = useStore(relationStore)
 
 const menus = [
-  { path: '/trenches', label: '探方清单', icon: 'Grid' },
-  { path: '/strata', label: '地层单位编目', icon: 'Files' },
-  { path: '/artifacts', label: '出土物登记', icon: 'Box' },
-  { path: '/relations', label: '层位关系', icon: 'Share' },
-  { path: '/sections', label: '四壁剖面示意', icon: 'DataLine' }
+  { path: '/trenches', pathPrefix: '/trenches', label: '探方清单', icon: 'Grid' },
+  { path: '/strata', pathPrefix: '/strata', label: '地层单位编目', icon: 'Files' },
+  { path: '/phases', pathPrefix: '/phases', label: '联合分期', icon: 'Histogram' },
+  { path: '/artifacts', pathPrefix: '/artifacts', label: '出土物登记', icon: 'Box' },
+  { path: '/relations', pathPrefix: '/relations', label: '层位关系', icon: 'Share' },
+  { path: '/sections', pathPrefix: '/sections', label: '四壁剖面示意', icon: 'DataLine' }
 ]
 
-const activeMenu = computed(() => menus.find((item) => route.path.startsWith(item.path))?.path ?? '/trenches')
+const activeMenu = computed(() => menus.find((item) => route.path.startsWith(item.pathPrefix))?.path ?? '/trenches')
 
 const stats = computed(() => [
   { label: '探方', value: trenchState.trenches.length },

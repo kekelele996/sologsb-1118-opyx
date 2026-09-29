@@ -4,7 +4,7 @@ import Dexie, { type Table } from 'dexie'
 import type { Artifact, Relation, Stratum, Trench } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
@@ -47,6 +47,25 @@ class TrenchLogDb extends Dexie {
             }
             if (!Array.isArray(stratum.inclusions)) {
               stratum.inclusions = []
+            }
+          })
+      })
+    // v3：地层单位新增「期别」字段，支持跨探方联合分期；迁移时历史数据统一置为未分期
+    this.version(SCHEMA_VERSION)
+      .stores({
+        trenches: 'id, code, area, backfilled',
+        strata: 'id, trenchId, code, type, topDepth, phase',
+        artifacts: 'id, stratumId, code, category, date',
+        relations: 'id, unitAId, unitBId, type, basis',
+        meta: 'key'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<Stratum, string>('strata')
+          .toCollection()
+          .modify((stratum) => {
+            if (stratum.phase === undefined) {
+              stratum.phase = null
             }
           })
       })
@@ -134,7 +153,8 @@ export async function seedDemoData(): Promise<void> {
       inclusions: ['陶片', '炭屑'],
       formation: '近现代耕土层',
       date: today,
-      drawingNo: 'T0501-北壁-01'
+      drawingNo: 'T0501-北壁-01',
+      phase: 1
     },
     {
       id: 'st_0501_l2',
@@ -148,7 +168,8 @@ export async function seedDemoData(): Promise<void> {
       inclusions: ['陶片', '骨'],
       formation: '汉代文化层',
       date: today,
-      drawingNo: 'T0501-北壁-02'
+      drawingNo: 'T0501-北壁-02',
+      phase: 2
     },
     {
       id: 'st_0501_h12',
@@ -162,7 +183,8 @@ export async function seedDemoData(): Promise<void> {
       inclusions: ['陶片', '骨', '炭屑'],
       formation: '生活垃圾坑',
       date: today,
-      drawingNo: 'T0501-H12-平剖面'
+      drawingNo: 'T0501-H12-平剖面',
+      phase: 2
     },
     {
       id: 'st_0502_l1',
@@ -176,7 +198,23 @@ export async function seedDemoData(): Promise<void> {
       inclusions: ['陶片'],
       formation: '耕土层',
       date: today,
-      drawingNo: 'T0502-西壁-01'
+      drawingNo: 'T0502-西壁-01',
+      phase: 1
+    },
+    {
+      id: 'st_0502_l2',
+      trenchId: 'tr_0502',
+      code: 'L02',
+      type: '地层',
+      openLayer: '第②层',
+      topDepth: 0.3,
+      bottomDepth: 0.72,
+      soil: '黄褐色黏土，较致密',
+      inclusions: ['陶片', '炭屑'],
+      formation: '汉代文化层，与 T0501 第②层对应',
+      date: today,
+      drawingNo: 'T0502-西壁-02',
+      phase: 2
     }
   ])
 
@@ -229,6 +267,24 @@ export async function seedDemoData(): Promise<void> {
       basis: '剖面观察',
       recorder: '方铭',
       note: 'L01 叠压 L02，界面清晰'
+    },
+    {
+      id: 'rl_003',
+      unitAId: 'st_0502_l1',
+      type: '叠压',
+      unitBId: 'st_0502_l2',
+      basis: '剖面观察',
+      recorder: '方铭',
+      note: 'T0502 L01 叠压 L02，西壁可见'
+    },
+    {
+      id: 'rl_004',
+      unitAId: 'st_0502_l2',
+      type: '共存',
+      unitBId: 'st_0501_l2',
+      basis: '平面观察',
+      recorder: '方铭',
+      note: '跨探方对比：T0502 第②层与 T0501 第②层土质土色一致，同属一期'
     }
   ])
 }

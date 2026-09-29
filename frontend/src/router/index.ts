@@ -15,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '地层单位编目' }
   },
   {
+    path: '/phases',
+    name: 'phases',
+    component: () => import('@/pages/PhasesPage.vue'),
+    meta: { title: '跨探方联合分期' }
+  },
+  {
     path: '/artifacts',
     name: 'artifacts',
     component: () => import('@/pages/ArtifactsPage.vue'),

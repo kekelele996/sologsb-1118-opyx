@@ -9,6 +9,8 @@ export interface StratumState {
   save: (stratum: Stratum) => Promise<void>
   remove: (id: string) => Promise<void>
   bulkSetType: (ids: string[], type: UnitType) => Promise<void>
+  /** 批量保存分期结果（仅写入 phase 字段） */
+  bulkSetPhases: (phases: Map<string, number | null>) => Promise<void>
 }
 
 export const stratumStore = createStore<StratumState>((set, get) => ({
@@ -30,6 +32,15 @@ export const stratumStore = createStore<StratumState>((set, get) => ({
   bulkSetType: async (ids, type) => {
     const targets = get().strata.filter((item) => ids.includes(item.id))
     await Promise.all(targets.map((item) => syncPut<Stratum>(db.strata, { ...item, type })))
+    await get().hydrate()
+  },
+  bulkSetPhases: async (phases) => {
+    const targets = get().strata.filter((item) => phases.has(item.id))
+    await db.transaction('rw', db.strata, async () => {
+      await Promise.all(
+        targets.map((item) => syncPut<Stratum>(db.strata, { ...item, phase: phases.get(item.id) ?? null }))
+      )
+    })
     await get().hydrate()
   }
 }))

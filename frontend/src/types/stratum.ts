@@ -1,4 +1,6 @@
 /** 单位类型 */
+import type { Phase } from './phase'
+
 export const UNIT_TYPES = ['地层', '灰坑', '房址', '沟', '墓葬'] as const
 export type UnitType = (typeof UNIT_TYPES)[number]
 
@@ -27,6 +29,11 @@ export interface Stratum {
   date: string
   /** 绘图与拍照编号 */
   drawingNo: string
+  /**
+   * 跨探方联合分期的期别：正整数，编号越大越早；
+   * null 表示尚未定级。沿叠压/打破链要求 前项期别 ≤ 后项期别。
+   */
+  phase: Phase
 }
 
 /** 厚度（米） */

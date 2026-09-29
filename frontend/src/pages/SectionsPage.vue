@@ -4,6 +4,8 @@ import type { Artifact, Stratum } from '@/types'
 import { stratumThickness } from '@/types'
 import StratumDepthBar from '@/components/common/StratumDepthBar.vue'
 import { useStore } from '@/hooks/usePersistentStore'
+import { usePhaseFilter } from '@/hooks/usePhaseFilter'
+import { phaseLabel } from '@/utils/phasing'
 import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
@@ -13,6 +15,8 @@ const WALLS = ['北壁', '东壁', '南壁', '西壁'] as const
 const stratumState = useStore(stratumStore)
 const trenchState = useStore(trenchStore)
 const artifactState = useStore(artifactStore)
+
+const { active: activePhase, setPhase, dimmedByPhase, optionsOf } = usePhaseFilter()
 
 const selectedTrenchId = ref('')
 const wall = ref<(typeof WALLS)[number]>('北壁')
@@ -58,8 +62,20 @@ const ticks = computed(() => {
 
 const artifactsOfTrench = computed<Artifact[]>(() => {
   const unitIds = strata.value.map((item) => item.id)
-  return artifactState.artifacts.filter((item) => unitIds.includes(item.stratumId))
+  return artifactState.artifacts.filter((item) => {
+    if (!unitIds.includes(item.stratumId)) return false
+    if (activePhase.value === null) return true
+    return stratumState.strata.find((row) => row.id === item.stratumId)?.phase === activePhase.value
+  })
 })
+
+/** 全工地期别选项（与关系图共用同一筛选状态） */
+const phaseOptions = computed(() => optionsOf(stratumState.strata.map((item) => item.phase)))
+
+/** 条带透明度：非所选期别弱化 */
+function bandOpacity(stratum: Stratum): number {
+  return dimmedByPhase(stratum.phase) ? 0.18 : 0.92
+}
 
 /** 出土物在剖面上的投影位置：X 轴按探方内 X 坐标，Y 轴按出土深度 */
 function artifactPos(artifact: Artifact): { x: number; y: number } {
@@ -96,6 +112,15 @@ const unitColors: Record<string, string> = {
         <el-select v-model="wall" style="width: 120px">
           <el-option v-for="item in WALLS" :key="item" :label="item" :value="item" />
         </el-select>
+        <el-select
+          :model-value="activePhase"
+          placeholder="全部期别"
+          clearable
+          style="width: 150px"
+          @update:model-value="(value: number | null) => setPhase(value ?? null)"
+        >
+          <el-option v-for="phase in phaseOptions" :key="phase" :label="phaseLabel(phase)" :value="phase" />
+        </el-select>
         <el-switch v-model="showArtifacts" active-text="显示出土物" />
       </div>
     </div>
@@ -123,11 +148,13 @@ const unitColors: Record<string, string> = {
 
     <div class="layout">
       <el-card shadow="never" class="section-card">
-        <template #header>{{ wall }}剖面示意（深度刻度 0 – {{ maxDepth }} m）</template>
+        <template #header>
+          {{ wall }}剖面示意（深度刻度 0 – {{ maxDepth }} m<template v-if="activePhase !== null"> · 仅高亮{{ phaseLabel(activePhase) }}</template>）
+        </template>
         <svg :width="CANVAS_W" :height="CANVAS_H" role="img" :aria-label="`${wall}剖面示意`">
           <rect :width="CANVAS_W" :height="CANVAS_H" rx="10" fill="#fbfaf6" stroke="#e6ded0" />
           <!-- 地层条带 -->
-          <g v-for="stratum in strata" :key="stratum.id">
+          <g v-for="stratum in strata" :key="stratum.id" :opacity="bandOpacity(stratum)">
             <rect
               x="90"
               :y="depthToY(Math.min(stratum.topDepth, stratum.bottomDepth))"
@@ -192,10 +219,13 @@ const unitColors: Record<string, string> = {
       <el-card shadow="never" class="list-card">
         <template #header>地层条带（深度刻度条）</template>
         <div class="bars">
-          <div v-for="stratum in strata" :key="stratum.id" class="bar-row">
+          <div v-for="stratum in strata" :key="stratum.id" class="bar-row" :class="{ dimmed: dimmedByPhase(stratum.phase) }">
             <div class="bar-head">
               <span class="mono">{{ stratum.code }}</span>
               <el-tag size="small" effect="plain">{{ stratum.type }}</el-tag>
+              <el-tag v-if="stratum.phase !== null && stratum.phase !== undefined" size="small" type="warning" effect="dark">
+                {{ phaseLabel(stratum.phase) }}
+              </el-tag>
               <span class="muted">{{ stratum.openLayer }}</span>
             </div>
             <StratumDepthBar :stratum="stratum" :length="250" :max-depth="maxDepth" />
@@ -274,6 +304,9 @@ const unitColors: Record<string, string> = {
 .bar-row {
   padding-bottom: 8px;
   border-bottom: 1px dotted #e6ded0;
+}
+.bar-row.dimmed {
+  opacity: 0.32;
 }
 .bar-head {
   display: flex;

@@ -7,6 +7,8 @@ import RelationGraph from '@/components/common/RelationGraph.vue'
 import UnitPicker from '@/components/common/UnitPicker.vue'
 import { useStore } from '@/hooks/usePersistentStore'
 import { checkRelationCycle, useRelationGraph } from '@/hooks/useRelationGraph'
+import { usePhaseFilter } from '@/hooks/usePhaseFilter'
+import { phaseLabel } from '@/utils/phasing'
 import { relationStore } from '@/stores/relationStore'
 import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
@@ -15,6 +17,8 @@ import { uid } from '@/utils/id'
 const relationState = useStore(relationStore)
 const stratumState = useStore(stratumStore)
 const trenchState = useStore(trenchStore)
+
+const { active: activePhase, setPhase, dimmedByPhase, optionsOf } = usePhaseFilter()
 
 const filterTrenchId = ref('')
 const activeId = ref<string | null>(null)
@@ -34,6 +38,18 @@ const graphStrata = computed(() =>
     ? stratumState.strata.filter((item) => item.trenchId === filterTrenchId.value)
     : stratumState.strata
 )
+
+/** 全工地出现过的期别（跨探方共用） */
+const phaseOptions = computed(() => optionsOf(stratumState.strata.map((item) => item.phase)))
+
+/** 当前期别筛选下需弱化的节点 */
+const dimmedIds = computed(
+  () => new Set(graphStrata.value.filter((item) => dimmedByPhase(item.phase)).map((item) => item.id))
+)
+
+const phaseMap = computed(() => new Map(stratumState.strata.map((item) => [item.id, item.phase])))
+
+const phaseOf = (id: string): number | null | undefined => phaseMap.value.get(id)
 
 const { graph, highlighted, degreeOf } = useRelationGraph(
   graphStrata,
@@ -135,10 +151,20 @@ function selectNode(nodeId: string): void {
         <h2 class="page-title">层位关系视图</h2>
         <p class="page-sub">
           以有向图展示叠压与打破关系；点击节点高亮其直接关系（前后继），新增关系时先做环路检测，闭合矛盾关系会被拒绝保存。
+          顶部按期别筛选时，关系图与「四壁剖面」联动，非所选期别的单位弱化显示。
         </p>
       </div>
       <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 190px">
         <el-option v-for="trench in trenchState.trenches" :key="trench.id" :label="`${trench.area} · ${trench.code}`" :value="trench.id" />
+      </el-select>
+      <el-select
+        :model-value="activePhase"
+        placeholder="全部期别"
+        clearable
+        style="width: 150px"
+        @update:model-value="(value: number | null) => setPhase(value ?? null)"
+      >
+        <el-option v-for="phase in phaseOptions" :key="phase" :label="phaseLabel(phase)" :value="phase" />
       </el-select>
     </div>
 
@@ -178,6 +204,7 @@ function selectNode(nodeId: string): void {
           :edges="graph.edges"
           :highlighted="highlighted"
           :active-id="activeId"
+          :dimmed-ids="dimmedIds"
           :width="720"
           :height="420"
           @select="selectNode"
@@ -234,8 +261,10 @@ function selectNode(nodeId: string): void {
           <ul class="rel-list">
             <li v-for="relation in relationState.relations" :key="relation.id">
               <span class="mono">{{ unitLabel(relation.unitAId) }}</span>
+              <el-tag size="small" type="warning" effect="plain">{{ phaseLabel(phaseOf(relation.unitAId)) }}</el-tag>
               <el-tag size="small" effect="dark" class="type">{{ relation.type }}</el-tag>
               <span class="mono">{{ unitLabel(relation.unitBId) }}</span>
+              <el-tag size="small" type="warning" effect="plain">{{ phaseLabel(phaseOf(relation.unitBId)) }}</el-tag>
               <span class="muted">（{{ relation.basis }} · {{ relation.recorder || '未填记录人' }}）</span>
               <span class="ops">
                 <el-button link type="primary" size="small" @click="edit(relation)">编辑</el-button>
